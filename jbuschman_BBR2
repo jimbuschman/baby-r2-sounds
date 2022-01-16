@@ -1,22 +1,111 @@
-#include <IBusBM.h>
+#include "IBusBM.h"
+#include "SoftwareSerial.h"
+#include "DFRobotDFPlayerMini.h"
 
 IBusBM IBus;
+DFRobotDFPlayerMini myDFPlayer;
 bool pins[10] = {false,false,false,false,false,false,false,false,false,false};
 int CurrentVol = 30; //I belive 30 is max
-int Pin8 = 0;//this one has 3 pos, so to utilize that we are pulling it out on its own
+int ThreePosSwitchState = 0;//this one has 3 pos, so to utilize that we are pulling it out on its own
 int ChannelValue = 0;
 
-int VolumnChannel = 4;
-int ThreePosChannel = 8;
+int VolumnChannel = 8;
+int RandomPlaySpeed = 9;
+int ThreePosChannel = 6;
+const int swa = 4;
+const int swb = 5; 
+const int swd = 7;
+
+int ranNum = 0;
+int randPlaySpeed = 15000;
+static bool playRandomSounds = false;
+
+SoftwareSerial mySoftwareSerial(10, 11); // RX, TX
 
 void setup() {
- IBus.begin(Serial); 
+ IBus.begin(Serial);
+ mySoftwareSerial.begin(9600); 
  Serial.begin(115200);
-// pinMode(LEDPIN, OUTPUT);
-Serial.print("Ready...");
-Serial.println();
+
+
+Serial.println(F("DFRobot DFPlayer Mini Demo"));
+  Serial.println(F("Initializing DFPlayer ... (May take 3~5 seconds)"));
+  
+  if (!myDFPlayer.begin(mySoftwareSerial)) {  //Use softwareSerial to communicate with mp3.
+    Serial.println(F("Unable to begin:"));
+    Serial.println(F("1.Please recheck the connection!"));
+    Serial.println(F("2.Please insert the SD card!"));
+    while(true){
+      delay(0); // Code to compatible with ESP8266 watch dog.
+    }
+  }
+  Serial.println(F("DFPlayer Mini online."));
+  
+  myDFPlayer.volume(CurrentVol);  //Set volume value. From 0 to 30
+  myDFPlayer.play(21);  //Play the first mp3
+
 }
 
+void printDetail(uint8_t type, int value){
+  switch (type) {
+    case TimeOut:
+      Serial.println(F("Time Out!"));
+      break;
+    case WrongStack:
+      Serial.println(F("Stack Wrong!"));
+      break;
+    case DFPlayerCardInserted:
+      Serial.println(F("Card Inserted!"));
+      break;
+    case DFPlayerCardRemoved:
+      Serial.println(F("Card Removed!"));
+      break;
+    case DFPlayerCardOnline:
+      Serial.println(F("Card Online!"));
+      break;
+    case DFPlayerUSBInserted:
+      Serial.println("USB Inserted!");
+      break;
+    case DFPlayerUSBRemoved:
+      Serial.println("USB Removed!");
+      break;
+    case DFPlayerPlayFinished:
+      Serial.print(F("Number:"));
+      Serial.print(value);
+      Serial.println(F(" Play Finished!"));
+      break;
+    case DFPlayerError:
+      Serial.print(F("DFPlayerError:"));
+      switch (value) {
+        case Busy:
+          Serial.println(F("Card not found"));
+          break;
+        case Sleeping:
+          Serial.println(F("Sleeping"));
+          break;
+        case SerialWrongStack:
+          Serial.println(F("Get Wrong Stack"));
+          break;
+        case CheckSumNotMatch:
+          Serial.println(F("Check Sum Not Match"));
+          break;
+        case FileIndexOut:
+          Serial.println(F("File Index Out of Bound"));
+          break;
+        case FileMismatch:
+          Serial.println(F("Cannot Find File"));
+          break;
+        case Advertise:
+          Serial.println(F("In Advertise"));
+          break;
+        default:
+          break;
+      }
+      break;
+    default:
+      break;
+  }
+}
 
 bool ReadChannel(int c)
 {
@@ -33,18 +122,35 @@ bool ReadChannel(int c)
 
 
 //This will convert the controler range to the volume range. In this instance the volume is 0-30. 
-int GetVolumn(int value)
+long GetNewRange(long value,long newmax, long newmin, long oldmax, long oldmin)
 {
-  int max = 30, min = 0; //the volume max and  min.
-  int oldRange = 2000 - 1000;
-  int newRange = max - min;
-  int newValue = ((value - 1000) * newRange / oldRange) + min;
+  //int max = 30, min = 0; //the volume max and  min.
+  long oldRange = oldmax - oldmin;
+  long newRange = newmax - newmin;
+  long newValue = ((value - oldmin) * newRange / oldRange) + newmin;
  
   return newValue;
 }
 
 void loop() {
 
+  static unsigned long timer = millis();
+  
+  if (millis() - timer > randPlaySpeed) {
+    timer = millis();
+    if(playRandomSounds)
+    {
+      //myDFPlayer.next();  //Play next mp3 every 15 second.
+      //int num = random(1, 162);
+      ranNum = random(1, 162);
+      //erial.println(num);
+      myDFPlayer.play(ranNum); //plays random file every 15 seconds. 
+    }
+  }
+  
+  if (myDFPlayer.available()) {
+    printDetail(myDFPlayer.readType(), myDFPlayer.read()); //Print the detail message from DFPlayer to handle different errors and states.
+  }
   //loop through all 10 channels.
   for(int i = 1; i <= 10; i++)
   {
@@ -52,58 +158,128 @@ void loop() {
     
     if(i == VolumnChannel)//this is my vol control
     {
-      int vol = GetVolumn(ChannelValue);
+      int vol = GetNewRange(ChannelValue,30,0,2000,1000);
       if(CurrentVol != vol)
       {
         CurrentVol = vol;
         Serial.print(ChannelValue);
         Serial.print(": Val : ");      
         Serial.println(vol);
+
+        myDFPlayer.volume(CurrentVol);
       }
       
+    }
+    else if(i == RandomPlaySpeed)//this is my vol control
+    {
+       int speed = GetNewRange(ChannelValue,30000,5000,2000,1000);
+       //Serial.println(ChannelValue);
+      if(randPlaySpeed != speed)
+      {
+        
+        randPlaySpeed = speed;
+        Serial.print(randPlaySpeed);
+        Serial.print(": Val : ");      
+        Serial.println(speed);
+
+        
+      }
     }
     else if(i == ThreePosChannel)// 3 pos toggle
     {
       if (ChannelValue > 1990) {
-        if(Pin8 != 1792) //Magic number here, not sure why I couldn't get this to work like the volumn. These values worked for me.
+        if(ThreePosSwitchState != 1792) //Magic number here, not sure why I couldn't get this to work like the volumn. These values worked for me.
         {
-          Pin8 = 1792;//Magic number here, not sure why I couldn't get this to work like the volumn. These values worked for me.
+          ThreePosSwitchState = 1792;//Magic number here, not sure why I couldn't get this to work like the volumn. These values worked for me.
           Serial.print(i);
           Serial.print(": 3pos : ");
-          Serial.println(Pin8);
+          Serial.println(ThreePosSwitchState);
+
+           myDFPlayer.play(144);
         }
       }
       else if (ChannelValue == 1500) {
-        if(Pin8 != 1280)//Magic number here, not sure why I couldn't get this to work like the volumn. These values worked for me.
+        if(ThreePosSwitchState != 1280)//Magic number here, not sure why I couldn't get this to work like the volumn. These values worked for me.
         {
-          Pin8 = 1280;//Magic number here, not sure why I couldn't get this to work like the volumn. These values worked for me.
+          ThreePosSwitchState = 1280;//Magic number here, not sure why I couldn't get this to work like the volumn. These values worked for me.
           Serial.print(i);
           Serial.print(": 3pos : ");
-          Serial.println(Pin8);
+          Serial.println(ThreePosSwitchState);
+
+           myDFPlayer.play(50);
         }
       }
       else {
-        Pin8 = 0;
+        ThreePosSwitchState = 0;
       }
     }
     else 
     {
       if(switchOn)
-      {
+      {        
         if(pins[i] == false)
         {
           Serial.print(i);
           Serial.print(": Down : ");
           Serial.println(ChannelValue);
           pins[i] = true;
+
+   
+            switch (i) {
+              case swa:
+                myDFPlayer.play(57);
+                break;
+              case swb:
+                myDFPlayer.play(47);
+                break;   
+              case swd:           
+                 if(pins[swa] == true && pins[swb] == true && ThreePosSwitchState == 1792)
+                {
+                  //Serial.println("pos3");
+                  //Serial.println(ThreePosSwitchState);
+                  myDFPlayer.play(163);//162
+                } 
+                else if(pins[swa] == true && pins[swb] == true && ThreePosSwitchState == 1280)
+                {
+                  //Serial.println("pos2");
+                  //Serial.println(ThreePosSwitchState);
+                  myDFPlayer.play(164);//cantina
+                }  
+                else if(pins[swa] == true && pins[swb] == true && ThreePosSwitchState == 0)
+                {
+                  //Serial.println("pos1");
+                  //Serial.println(ThreePosSwitchState);
+                  myDFPlayer.play(165);//disco
+                }
+                else if(pins[swa] == true && pins[swb] == false && ThreePosSwitchState == 0)
+                {
+                  //Serial.println("pos1");
+                  //Serial.println(ThreePosSwitchState);
+                  myDFPlayer.play(166);//disco
+                }
+                 else if(pins[swa] == false && pins[swb] == true && ThreePosSwitchState == 0)
+                {
+                  //Serial.println("pos1");
+                  //Serial.println(ThreePosSwitchState);
+                  myDFPlayer.play(167);//disco
+                }
+                else
+                {
+                 playRandomSounds = true;
+                }
+                break;          
+          
+          }
         }
       }
       else
       {
         pins[i] = false;
+        if(i == swd)
+          playRandomSounds = false;
       }
     }
 
   }
-      delay(1000);
+      delay(500);
 }
